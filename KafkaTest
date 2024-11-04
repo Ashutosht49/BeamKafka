@@ -1,0 +1,71 @@
+import json
+import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions
+
+class ExtractAge(beam.DoFn):
+    def process(self, element):
+        # Assuming element is a JSON string
+        data = json.loads(element)
+        name = data['Name']
+        address = data['Address']
+        dob = data['DateOfBirth']
+
+        # Calculate age
+        from datetime import datetime
+        birth_date = datetime.strptime(dob, "%Y-%m-%d")
+        age = (datetime.now() - birth_date).days // 365
+        
+        # Prepare output
+        output_data = {
+            'Name': name,
+            'Address': address,
+            'DateOfBirth': dob,
+            'Age': age
+        }
+
+        if age % 2 == 0:
+            yield beam.pvalue.TaggedOutput('even', json.dumps(output_data))
+        else:
+            yield beam.pvalue.TaggedOutput('odd', json.dumps(output_data))
+
+class WriteToKafka(beam.DoFn):
+    def __init__(self, topic):
+        self.topic = topic
+
+    def process(self, element):
+        from kafka import KafkaProducer
+        producer = KafkaProducer(bootstrap_servers='localhost:9092',
+                                 value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+        producer.send(self.topic, value=element)
+        producer.flush()
+
+class WriteToFile(beam.DoFn):
+    def process(self, element):
+        with open('output.txt', 'a') as f:
+            f.write(element + '\n')
+
+def run():
+    options = PipelineOptions()
+    
+    with beam.Pipeline(options=options) as p:
+        inbound_data = (
+            p
+            | 'Read from Kafka' >> beam.io.ReadFromKafka(
+                consumer_config={'bootstrap.servers': 'localhost:9092',
+                                 'group.id': 'my-group'},
+                topics=['input_topic'])
+            | 'Extract Age' >> beam.ParDo(ExtractAge()).with_outputs('even', 'odd', main='main')
+        )
+
+        # Publish to EVEN_TOPIC
+        inbound_data.even | 'Write to Even Kafka' >> beam.ParDo(WriteToKafka('even_topic'))
+        
+        # Publish to ODD_TOPIC
+        inbound_data.odd | 'Write to Odd Kafka' >> beam.ParDo(WriteToKafka('odd_topic'))
+        
+        # Persist all messages to file
+        inbound_data.even | 'Write Even to File' >> beam.ParDo(WriteToFile())
+        inbound_data.odd | 'Write Odd to File' >> beam.ParDo(WriteToFile())
+
+if __name__ == '__main__':
+    run()
