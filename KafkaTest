@@ -2,9 +2,28 @@ import json
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 
+
+input_topic = 'inbound_topic'
+output_topic_1 = 'outbound_topic_1'
+output_topic_2 = 'outbound_topic_2'
+
+
+
+
 class ExtractAge(beam.DoFn):
     def process(self, element):
-        # Assuming element is a JSON string
+        # Create a Kafka consumer
+        consumer = KafkaConsumer(
+            input_topic,
+            bootstrap_servers='localhost:9092',  # Adjust to your Kafka server
+            auto_offset_reset='earliest',
+            enable_auto_commit=True,
+            group_id='my-group',
+            value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+        )
+        for message in consumer:
+            data = message.value
+        
         data = json.loads(element)
         name = data['Name']
         address = data['Address']
